@@ -4,6 +4,8 @@ import os
 import re
 from flask import Flask
 from threading import Thread
+# Inline uchun kerakli kutubxonalar qo'shildi
+from telebot.types import InlineQueryResultArticle, InputTextMessageContent
 
 # SIZNING BOT TOKENINGIZ
 TOKEN = '8758590017:AAG6G0smLcTkJSiTeX8SmOGL7Jwtbo7aqsI'
@@ -220,6 +222,74 @@ def search_product(message):
     if len(results) > 10:
         response += f"\n...va yana {len(results) - 10} ta tovar. Aniqroq qidirish uchun modelni to'liqroq yozing."
     bot.send_message(message.chat.id, response, parse_mode='Markdown')
+
+# ======= INLINE QIDIRUV (YANGI QO'SHILGAN QISM) =======
+@bot.inline_handler(func=lambda query: len(query.query) > 1)
+def query_text(inline_query):
+    # Ruxsat berilganlarni tekshirish
+    if inline_query.from_user.id not in ALLOWED_USERS:
+        return
+    
+    q = inline_query.query.strip()
+    clean_query = extract_core_model(q)
+    
+    if len(clean_query) < 2:
+        return
+        
+    df = db['baza']
+    if df.empty:
+        return
+        
+    results_df = df[df['Nom_Qidiruv'].astype(str).str.contains(clean_query, na=False)]
+    
+    results = []
+    for index, row in results_df.head(15).iterrows():
+        n_neg = float(row['Narx_NEG'])
+        n_kss = float(row['Narx_KSS'])
+        tovar_nomi = row['Tovar_Nomi']
+        
+        if n_neg > 0 and n_kss > 0:
+            str_neg = f"{n_neg} $"
+            str_kss = f"{n_kss} $"
+            if n_neg < n_kss:
+                farq = n_kss - n_neg
+                foiz = (farq / n_kss) * 100
+                xulosa = f"NEG arzon 🟢 (Farq: {round(farq, 2)} $, {round(foiz, 1)}%)"
+            elif n_kss < n_neg:
+                farq = n_neg - n_kss
+                foiz = (farq / n_neg) * 100
+                xulosa = f"KSS arzon 🔵 (Farq: {round(farq, 2)} $, {round(foiz, 1)}%)"
+            else:
+                xulosa = "Narxlar bir xil ⚖️"
+        elif n_neg > 0 and n_kss == 0:
+            str_neg = f"{n_neg} $"
+            str_kss = "Sotuvda yo'q ❌"
+            xulosa = "Faqat NEG do'konida bor 🟢"
+        elif n_kss > 0 and n_neg == 0:
+            str_neg = "Sotuvda yo'q ❌"
+            str_kss = f"{n_kss} $"
+            xulosa = "Faqat KSS do'konida bor 🔵"
+        else:
+            continue
+            
+        text_content = f"📦 **{tovar_nomi}**\n▫️ NEG narxi: {str_neg}\n▫️ KSS narxi: {str_kss}\n✅ **Xulosa:** {xulosa}"
+        
+        r = InlineQueryResultArticle(
+            id=str(index),
+            title=tovar_nomi,
+            description=xulosa,
+            input_message_content=InputTextMessageContent(
+                message_text=text_content, 
+                parse_mode='Markdown'
+            )
+        )
+        results.append(r)
+        
+    try:
+        bot.answer_inline_query(inline_query.id, results)
+    except Exception as e:
+        pass
+
 
 # ======= 24/7 SERVER UCHUN FLASK QISMI =======
 app = Flask(__name__)
